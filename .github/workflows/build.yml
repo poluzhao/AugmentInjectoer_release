@@ -299,8 +299,17 @@ jobs:
         if: steps.version_check.outputs.skip_build == 'false'
         run: |
           echo "📄 Creating README..."
-          cp resources/README.md unpacked_ext/README.md
-          echo "✅ README created"
+
+          # Find the correct location for README.md
+          if [ -d "unpacked_ext/extension" ]; then
+            # If extension directory exists, put README there
+            cp resources/README.md unpacked_ext/extension/README.md
+            echo "✅ README created in extension directory"
+          else
+            # Otherwise put in root
+            cp resources/README.md unpacked_ext/README.md
+            echo "✅ README created in root directory"
+          fi
 
       - name: Package VSIX
         if: steps.version_check.outputs.skip_build == 'false'
@@ -332,8 +341,6 @@ jobs:
             3. Go to Extensions (Ctrl+Shift+X)
             4. Click the "..." menu and select "Install from VSIX..."
             5. Select the downloaded file
-
-            - Based on official Augment extension v${{ env.VERSION }}
 
             ## 🔧 Technical Details
             - **Base Version**: v${{ env.VERSION }}
