@@ -319,49 +319,71 @@ jobs:
                           # Check existing configuration structure
                           if 'configuration' in pkg_data['contributes']:
                               log(f"Existing configuration type: {type(pkg_data['contributes']['configuration'])}")
+
                               if isinstance(pkg_data['contributes']['configuration'], list):
-                                  log("Configuration is a list, converting to object")
-                                  pkg_data['contributes']['configuration'] = {
-                                      "title": "Augment Balance",
-                                      "properties": {}
-                                  }
-                              elif not isinstance(pkg_data['contributes']['configuration'], dict):
-                                  log("Configuration is not dict or list, creating new")
-                                  pkg_data['contributes']['configuration'] = {
-                                      "title": "Augment Balance",
-                                      "properties": {}
-                                  }
-                              elif 'properties' not in pkg_data['contributes']['configuration']:
-                                  pkg_data['contributes']['configuration']['properties'] = {}
+                                  log("Configuration is a list - adding new configuration object to array")
+
+                                  # Check if Augment Balance configuration already exists
+                                  balance_config_exists = False
+                                  for existing_config in pkg_data['contributes']['configuration']:
+                                      if existing_config.get('title') == 'Augment Balance':
+                                          log("Augment Balance configuration already exists in array")
+                                          balance_config_exists = True
+                                          break
+
+                                  if not balance_config_exists:
+                                      # Add new configuration object to the array
+                                      new_config = {
+                                          "title": config.get('title', 'Augment Balance'),
+                                          "properties": config.get('properties', {})
+                                      }
+                                      pkg_data['contributes']['configuration'].append(new_config)
+                                      log(f"Added new configuration object: {config.get('title', 'Augment Balance')}")
+                                      log(f"Added {len(config.get('properties', {}))} configuration properties")
+
+                              elif isinstance(pkg_data['contributes']['configuration'], dict):
+                                  log("Configuration is a dict - merging properties")
+
+                                  # Ensure properties exist
+                                  if 'properties' not in pkg_data['contributes']['configuration']:
+                                      pkg_data['contributes']['configuration']['properties'] = {}
+
+                                  # Merge properties
+                                  added_configs = 0
+                                  for prop_name, prop_config in config.get('properties', {}).items():
+                                      if prop_name not in pkg_data['contributes']['configuration']['properties']:
+                                          pkg_data['contributes']['configuration']['properties'][prop_name] = prop_config
+                                          log(f"Added configuration property: {prop_name}")
+                                          added_configs += 1
+                                      else:
+                                          log(f"Configuration property already exists: {prop_name}")
+
+                                  log(f"Added {added_configs} configuration properties to existing dict")
+
+                              else:
+                                  log("Configuration is neither dict nor list, creating new array")
+                                  pkg_data['contributes']['configuration'] = [
+                                      {
+                                          "title": config.get('title', 'Augment Balance'),
+                                          "properties": config.get('properties', {})
+                                      }
+                                  ]
+                                  log("Created new configuration array with Augment Balance")
+
                           else:
-                              log("Creating new configuration section")
-                              pkg_data['contributes']['configuration'] = {
-                                  "title": "Augment Balance",
-                                  "properties": {}
-                              }
-
-                          # Set title if provided
-                          if 'title' in config:
-                              pkg_data['contributes']['configuration']['title'] = config['title']
-                              log(f"Set configuration title: {config['title']}")
-
-                          # Add configuration properties
-                          if 'properties' in config:
-                              added_configs = 0
-                              for prop_name, prop_config in config['properties'].items():
-                                  if prop_name not in pkg_data['contributes']['configuration']['properties']:
-                                      pkg_data['contributes']['configuration']['properties'][prop_name] = prop_config
-                                      log(f"Added configuration: {prop_name}")
-                                      added_configs += 1
-                                  else:
-                                      log(f"Configuration already exists: {prop_name}")
-
-                              log(f"Added {added_configs} configuration properties")
-                          else:
-                              log("No properties found in configuration_to_add")
+                              log("Creating new configuration array")
+                              pkg_data['contributes']['configuration'] = [
+                                  {
+                                      "title": config.get('title', 'Augment Balance'),
+                                      "properties": config.get('properties', {})
+                                  }
+                              ]
+                              log("Created new configuration array")
 
                       except Exception as config_error:
                           log(f"Error adding configuration: {config_error}")
+                          import traceback
+                          log(f"Traceback: {traceback.format_exc()}")
                           log("Skipping configuration addition")
               else:
                   log("balance-package-commands.json not found, skipping")
@@ -456,7 +478,6 @@ jobs:
             - **Session Management**: Advanced session handling and spoofing
             - **Request Interception**: Comprehensive HTTP/HTTPS request modification
             - **Balance Enhancement**: Enhanced balance display and management
-            - **Hardware Spoofing**: System fingerprint protection
 
             ## 📥 Installation
             1. Download the `.vsix` file from this release
@@ -464,11 +485,6 @@ jobs:
             3. Go to Extensions (Ctrl+Shift+X)
             4. Click the "..." menu and select "Install from VSIX..."
             5. Select the downloaded file
-
-            ## ⚠️ Important Notes
-            - This is a modified version with enhanced functionality
-            - Use responsibly and in accordance with terms of service
-            - Based on official Augment extension v${{ env.VERSION }}
 
             ## 🔧 Technical Details
             - **Base Version**: v${{ env.VERSION }}
