@@ -177,28 +177,33 @@ jobs:
               # Find extension.js
               unpacked = Path('unpacked_ext')
               js_path, js_dir = find_extension_js(unpacked)
-              
+
               if not js_path:
                   error("extension.js not found!")
-              
+
               log(f"Found extension.js: {js_path}")
-              
+
+              # Fix file permissions (files from ZIP might be read-only)
+              import stat
+              js_path.chmod(stat.S_IWRITE | stat.S_IREAD)
+              log("File permissions fixed")
+
               # Read injection files
               resources = Path('resources')
               interceptor_content = (resources / 'interceptor.js').read_text(encoding='utf-8')
               token_content = (resources / 'token-login-enhanced.js').read_text(encoding='utf-8')
               balance_content = (resources / 'augment-balance-enhanced.js').read_text(encoding='utf-8')
-              
+
               # Copy module files to extension directory
               shutil.copy(resources / 'token-login-enhanced.js', js_dir / 'token-login-enhanced.js')
               shutil.copy(resources / 'augment-balance-enhanced.js', js_dir / 'augment-balance-enhanced.js')
               log("Module files copied")
-              
+
               # Perform triple injection
               inject_head(js_path, interceptor_content, 'Augment Interceptor Injection')
-              inject_tail(js_path, token_content, 'Augment Token Login Enhanced Injection')  
+              inject_tail(js_path, token_content, 'Augment Token Login Enhanced Injection')
               inject_tail(js_path, balance_content, 'Augment Balance Enhanced Injection')
-              
+
               log("✅ Triple injection completed successfully")
               
           except Exception as e:
@@ -231,9 +236,14 @@ jobs:
               
               if pkg_path:
                   log(f"Updating package.json: {pkg_path}")
+
+                  # Fix file permissions
+                  import stat
+                  pkg_path.chmod(stat.S_IWRITE | stat.S_IREAD)
+
                   with open(pkg_path, 'r', encoding='utf-8') as f:
                       pkg_data = json.load(f)
-                  
+
                   # Update display name
                   pkg_data['displayName'] = 'Augment 注入增强版'
                   
@@ -284,6 +294,9 @@ jobs:
                           break
                   
                   if readme_path:
+                      # Fix file permissions
+                      import stat
+                      readme_path.chmod(stat.S_IWRITE | stat.S_IREAD)
                       body = readme_path.read_text(encoding='utf-8')
                       readme_path.write_text(header + body, encoding='utf-8')
                       log("README header prepended")
