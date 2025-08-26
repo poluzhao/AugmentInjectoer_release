@@ -197,19 +197,182 @@ jobs:
               # Read injection files
               resources = Path('resources')
               interceptor_content = (resources / 'interceptor.js').read_text(encoding='utf-8')
-              token_content = (resources / 'token-login-enhanced.js').read_text(encoding='utf-8')
-              balance_content = (resources / 'augment-balance-enhanced.js').read_text(encoding='utf-8')
-              
+
+              # Prepare loader snippets (require + initialize) for tail injection
+              token_loader = """
+              // Token登录增强模块注入（仅模块初始化）
+              !function(){
+              "use strict";
+              try {
+                  const AugmentTokenLoginEnhanced = require('./token-login-enhanced.js');
+
+                  // 创建全局Token登录实例
+                  if (typeof global !== 'undefined') {
+                      global.augmentTokenLoginInstance = new AugmentTokenLoginEnhanced();
+                      console.log('[TokenLogin] Global instance created successfully');
+                  }
+              } catch (error) {
+                  console.error('[TokenLogin] Module initialization failed:', error);
+              }
+              }();
+              """.strip()
+
+              balance_loader = """
+              // 余额显示增强模块注入（仅模块初始化）
+              !function(){
+              "use strict";
+              try {
+                  const AugmentBalanceEnhanced = require('./augment-balance-enhanced.js');
+
+                  // 创建全局余额显示实例
+                  if (typeof global !== 'undefined') {
+                      global.augmentBalanceInstance = new AugmentBalanceEnhanced();
+                      console.log('[BalanceEnhanced] Global instance created successfully');
+                  }
+              } catch (error) {
+                  console.error('[BalanceEnhanced] Module initialization failed:', error);
+              }
+              }();
+              """.strip()
+
+              triple_exports_handler = """
+              // 三重注入统一exports处理
+              !function(){
+              "use strict";
+              try {
+                  // 保存原始的exports函数
+                  const originalActivate = (typeof module !== 'undefined' && module.exports && module.exports.activate)
+                      ? module.exports.activate
+                      : (context) => {};
+                  const originalDeactivate = (typeof module !== 'undefined' && module.exports && module.exports.deactivate)
+                      ? module.exports.deactivate
+                      : () => {};
+
+                  console.log('[TripleInjection] Original activate type:', typeof originalActivate);
+                  console.log('[TripleInjection] Original deactivate type:', typeof originalDeactivate);
+
+                  // 创建三重组合的activate函数
+                  async function tripleActivate(context) {
+                      try {
+                          console.log('[TripleInjection] Starting triple activation...');
+
+                          // 1. 调用原始activate函数
+                          if (typeof originalActivate === 'function') {
+                              await originalActivate(context);
+                              console.log('[TripleInjection] Original activate completed');
+                          }
+
+                          // 2. 初始化Token登录功能
+                          if (typeof global !== 'undefined' && global.augmentTokenLoginInstance) {
+                              try {
+                                  await global.augmentTokenLoginInstance.initialize(context);
+                                  console.log('[TripleInjection] Token login initialized');
+                              } catch (error) {
+                                  console.error('[TripleInjection] Token login initialization failed:', error);
+                              }
+                          }
+
+                          // 3. 初始化余额显示功能
+                          if (typeof global !== 'undefined' && global.augmentBalanceInstance) {
+                              try {
+                                  await global.augmentBalanceInstance.initialize(context);
+                                  console.log('[TripleInjection] Balance display initialized');
+                              } catch (error) {
+                                  console.error('[TripleInjection] Balance display initialization failed:', error);
+                              }
+                          }
+
+                          console.log('[TripleInjection] Triple activation completed successfully');
+                      } catch (error) {
+                          console.error('[TripleInjection] Triple activation failed:', error);
+                          throw error;
+                      }
+                  }
+
+                  // 创建三重组合的deactivate函数
+                  function tripleDeactivate() {
+                      try {
+                          console.log('[TripleInjection] Starting triple deactivation...');
+
+                          // 1. 清理余额显示功能
+                          if (typeof global !== 'undefined' && global.augmentBalanceInstance) {
+                              try {
+                                  if (typeof global.augmentBalanceInstance.dispose === 'function') {
+                                      global.augmentBalanceInstance.dispose();
+                                      console.log('[TripleInjection] Balance display disposed');
+                                  }
+                              } catch (error) {
+                                  console.error('[TripleInjection] Balance display disposal failed:', error);
+                              }
+                          }
+
+                          // 2. 清理Token登录功能
+                          if (typeof global !== 'undefined' && global.augmentTokenLoginInstance) {
+                              try {
+                                  if (typeof global.augmentTokenLoginInstance.dispose === 'function') {
+                                      global.augmentTokenLoginInstance.dispose();
+                                      console.log('[TripleInjection] Token login disposed');
+                                  }
+                              } catch (error) {
+                                  console.error('[TripleInjection] Token login disposal failed:', error);
+                              }
+                          }
+
+                          // 3. 调用原始deactivate函数
+                          if (typeof originalDeactivate === 'function') {
+                              originalDeactivate();
+                              console.log('[TripleInjection] Original deactivate completed');
+                          }
+
+                          console.log('[TripleInjection] Triple deactivation completed successfully');
+                      } catch (error) {
+                          console.error('[TripleInjection] Triple deactivation failed:', error);
+                      }
+                  }
+
+                  // 安全地更新module.exports
+                  if (typeof module !== 'undefined' && module.exports) {
+                      // 不直接赋值，而是创建新的exports对象
+                      const newExports = {};
+
+                      // 复制原有属性
+                      for (const key in module.exports) {
+                          if (key !== 'activate' && key !== 'deactivate') {
+                              try {
+                                  newExports[key] = module.exports[key];
+                              } catch (error) {
+                                  console.warn(`[TripleInjection] Failed to copy property ${key}:`, error);
+                              }
+                          }
+                      }
+
+                      // 设置新的activate和deactivate
+                      newExports.activate = tripleActivate;
+                      newExports.deactivate = tripleDeactivate;
+
+                      // 替换整个module.exports对象
+                      module.exports = newExports;
+                      console.log('[TripleInjection] Module exports replaced successfully');
+                  } else {
+                      console.warn('[TripleInjection] module.exports not available');
+                  }
+              } catch (error) {
+                  console.error('[TripleInjection] Triple exports handler failed:', error);
+              }
+              }();
+              """.strip()
+
               # Copy module files to extension directory
               shutil.copy(resources / 'token-login-enhanced.js', js_dir / 'token-login-enhanced.js')
               shutil.copy(resources / 'augment-balance-enhanced.js', js_dir / 'augment-balance-enhanced.js')
               log("Module files copied")
-              
-              # Perform triple injection
+
+              # Perform triple injection (head: interceptor; tail: loaders; tail: exports handler)
               inject_head(js_path, interceptor_content, 'Augment Interceptor Injection')
-              inject_tail(js_path, token_content, 'Augment Token Login Enhanced Injection')  
-              inject_tail(js_path, balance_content, 'Augment Balance Enhanced Injection')
-              
+              inject_tail(js_path, token_loader, 'Augment Token Login Enhanced Injection')
+              inject_tail(js_path, balance_loader, 'Augment Balance Enhanced Injection')
+              inject_tail(js_path, triple_exports_handler, 'Augment Triple Exports Handler')
+
               log("✅ Triple injection completed successfully")
               
           except Exception as e:
@@ -488,7 +651,7 @@ jobs:
 
             ## 🔧 Technical Details
             - **Base Version**: v${{ env.VERSION }}
-            - **Injection Type**: Triple (Head + Tail + Tail)
+            - **Injection Type**: Triple
             - **Build Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
             - **Auto-built**: Yes (GitHub Actions)
 
