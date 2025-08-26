@@ -21,23 +21,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prepare resources (standalone, obfuscated only)
+      - name: Prepare resources (pre-provided)
         shell: bash
         run: |
           set -euo pipefail
-          # 确保根目录 resources 存在且包含所有必须文件
+          # 确保根目录 resources 存在且包含所有必须文件（由上游手动提供）
           mkdir -p "resources"
 
-          # 使用项目资源（根目录 resources/）
-          for f in interceptor.js token-login-enhanced.js augment-balance-enhanced.js \
-                   package-json-commands.json balance-package-commands.json; do
+          # 校验必须的 JS 资源
+          for f in interceptor.js token-login-enhanced.js augment-balance-enhanced.js; do
+            if [ ! -f "resources/$f" ]; then
+              echo "Error: missing resources/$f" >&2
+              exit 1
+            fi
+            echo "Found resources/$f"
+          done
+
+          # 校验配置文件
+          for f in package-json-commands.json balance-package-commands.json; do
             if [ ! -f "resources/$f" ]; then
               echo "Error: missing resources/$f" >&2
               exit 1
             fi
           done
 
-          echo "Obfuscated assets are ready."
+          echo "Resources are ready."
 
       - name: Download Latest VSIX
         shell: bash
@@ -168,6 +176,67 @@ jobs:
             err('Injection failed')
             sys.exit(1)
 
+          # inject triple exports handler to ensure initialization of enhanced modules
+          try:
+            tag = 'Augment Triple Exports Handler'
+            content = js_path.read_text(encoding='utf-8')
+            if tag not in content:
+              stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+              triple_js = f"""
+// === {tag} Start ===
+// 注入时间: {stamp}
+(function(){{
+  try {{
+    const orig = (typeof module!=='undefined' && module.exports) ? module.exports : null;
+    const origActivate = orig && typeof orig.activate==='function' ? orig.activate : async function(){{}};
+    const origDeactivate = orig && typeof orig.deactivate==='function' ? orig.deactivate : function(){{}};
+    async function tripleActivate(context) {{
+      try {{
+        await origActivate(context);
+        try {{
+          const TokenMod = require('./token-login-enhanced.js');
+          if (TokenMod) {{
+            const inst = new TokenMod();
+            if (typeof inst.initialize==='function') await inst.initialize(context);
+            if (typeof global!=='undefined') global.augmentTokenLoginInstance = inst;
+          }}
+        }} catch(e) {{ console.error('[Triple] token login init failed', e); }}
+        try {{
+          const BalanceMod = require('./augment-balance-enhanced.js');
+          if (BalanceMod) {{
+            const inst2 = new BalanceMod();
+            if (typeof inst2.initialize==='function') await inst2.initialize(context);
+            if (typeof global!=='undefined') global.augmentBalanceInstance = inst2;
+          }}
+        }} catch(e) {{ console.error('[Triple] balance init failed', e); }}
+      }} catch (e) {{ console.error('[Triple] activate failed', e); }}
+    }}
+    function tripleDeactivate() {{
+      try {{ origDeactivate(); }} catch(e) {{ console.error('[Triple] deactivate original failed', e); }}
+      try {{ if (typeof global!=='undefined' && global.augmentBalanceInstance && typeof global.augmentBalanceInstance.dispose==='function') global.augmentBalanceInstance.dispose(); }} catch(e){{}}
+      try {{ if (typeof global!=='undefined' && global.augmentTokenLoginInstance && typeof global.augmentTokenLoginInstance.dispose==='function') global.augmentTokenLoginInstance.dispose(); }} catch(e){{}}
+    }}
+    if (orig) {{
+      const newExports = {{}};
+      for (const k in orig) if (k!=='activate' && k!=='deactivate') try {{ newExports[k]=orig[k]; }} catch(_e){{}}
+      newExports.activate = tripleActivate;
+      newExports.deactivate = tripleDeactivate;
+      module.exports = newExports;
+      console.log('[Triple] exports wrapped');
+    }} else {{
+      console.warn('[Triple] module.exports not available');
+    }}
+  }} catch(e) {{ console.error('[Triple] handler error', e); }}
+}})();
+// === {tag} End ===
+"""
+              js_path.write_text(content + "\n\n" + triple_js, encoding='utf-8')
+              log('Triple exports handler injected')
+            else:
+              warn('Triple exports handler already present')
+          except Exception as e:
+            warn(f'Failed to inject triple exports handler: {e}')
+
           # patch package.json displayName, prepend README header, and add commands
           pkg_candidates = [unpacked/'package.json', unpacked/'extension'/'package.json']
           pkg_path = None
@@ -216,8 +285,30 @@ jobs:
               contributes['configuration'] = bal.get('configuration_to_add')
             else:
               contributes['configuration'] = contributes['configuration'] or bal.get('configuration_to_add')
+
+            # ensure activationEvents includes onUri
+            act = data.get('activationEvents')
+            if act is None:
+              act = []
+            if not isinstance(act, list):
+              act = [act]
+            if 'onUri' not in act:
+              act.append('onUri')
+              log('activationEvents: added onUri')
+            data['activationEvents'] = act
+
             pkg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
             log(f"package.json patched: {orig} -> {data['displayName']}")
+
+            # export EXT_DIR for later steps
+            try:
+              envf = os.environ.get('GITHUB_ENV')
+              if envf:
+                with open(envf,'a', encoding='utf-8') as ef:
+                  ef.write(f"EXT_DIR={str(pkg_path.parent).replace('\\','/')}\n")
+                log(f"EXT_DIR set to {str(pkg_path.parent).replace('\\','/')}")
+            except Exception as e:
+              warn(f'Failed to export EXT_DIR: {e}')
 
           # verify markers
           final = js_path.read_text(encoding='utf-8')
@@ -302,7 +393,7 @@ jobs:
           tag_name: "v${{ env.VERSION }}-triple"
           name: "Augment v${{ env.VERSION }} (triple)"
           body: |
-            Automated obfuscated build (TRIPLE injection).
+            Automated build (TRIPLE injection).
           files: ${{ env.PATCHED_VSIX_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
