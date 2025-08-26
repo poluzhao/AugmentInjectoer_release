@@ -10,10 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      INJECTION_MODE: triple
-      FORCE_INJECTION: 'false'
-      DEBUG_MODE: 'false'
 
     steps:
       - name: Checkout repo
@@ -21,326 +17,76 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prepare resources (pre-provided)
-        shell: bash
+      - name: Validate resources
         run: |
-          set -euo pipefail
-          # 确保根目录 resources 存在且包含所有必须文件
-          mkdir -p "resources"
-
-          # 校验必须的 JS 资源
-          for f in interceptor.js token-login-enhanced.js augment-balance-enhanced.js; do
-            if [ ! -f "resources/$f" ]; then
-              echo "Error: missing resources/$f" >&2
+          echo "🔍 Validating required resources..."
+          
+          # Check required JS files
+          for file in interceptor.js token-login-enhanced.js augment-balance-enhanced.js; do
+            if [ ! -f "resources/$file" ]; then
+              echo "❌ Missing required file: resources/$file"
               exit 1
             fi
-            echo "Found resources/$f"
+            echo "✅ Found: resources/$file"
           done
-
-          # 校验配置文件
-          for f in package-json-commands.json balance-package-commands.json; do
-            if [ ! -f "resources/$f" ]; then
-              echo "Error: missing resources/$f" >&2
+          
+          # Check required config files
+          for file in package-json-commands.json balance-package-commands.json README.md; do
+            if [ ! -f "resources/$file" ]; then
+              echo "❌ Missing required file: resources/$file"
               exit 1
             fi
+            echo "✅ Found: resources/$file"
           done
-
-          echo "Resources are ready."
+          
+          echo "✅ All required resources validated"
 
       - name: Download Latest VSIX
-        shell: bash
         run: |
-          set -euo pipefail
+          echo "📥 Downloading latest Augment VSIX..."
           PUBLISHER="augment"
           EXTENSION_NAME="vscode-augment"
           VSIX_URL="https://marketplace.visualstudio.com/_apis/public/gallery/publishers/${PUBLISHER}/vsextensions/${EXTENSION_NAME}/latest/vspackage"
+          
           curl -L --compressed -o original.vsix "$VSIX_URL"
+          
+          # Verify download
+          if [ ! -f "original.vsix" ]; then
+            echo "❌ Failed to download VSIX"
+            exit 1
+          fi
+          
+          echo "✅ VSIX downloaded successfully"
           file original.vsix || true
 
-      - name: Unpack and Inject (head/tail)
-        shell: bash
+      - name: Extract VSIX
         run: |
-          set -euo pipefail
-          python3 - << 'PY'
-          import os, sys, zipfile, shutil, json, re
-          from pathlib import Path
-          from datetime import datetime
+          echo "📦 Extracting VSIX..."
+          mkdir -p unpacked_ext
+          cd unpacked_ext
+          unzip -q ../original.vsix
+          cd ..
+          echo "✅ VSIX extracted"
 
-          def log(m): print(f"[INFO] {m}")
-          def warn(m): print(f"[WARN] {m}")
-          def err(m): print(f"[ERROR] {m}")
-
-          mode = os.environ.get('INJECTION_MODE','dual')
-          force = os.environ.get('FORCE_INJECTION','false').lower()=='true'
-          debug = os.environ.get('DEBUG_MODE','false').lower()=='true'
-
-          resources = Path('resources')
-
-          vsix = Path('original.vsix')
-          unpacked = Path('unpacked_ext')
-          if unpacked.exists(): shutil.rmtree(unpacked)
-          unpacked.mkdir(parents=True, exist_ok=True)
-          with zipfile.ZipFile(vsix, 'r') as z: z.extractall(unpacked)
-          log('VSIX extracted')
-
-          # find extension.js
-          def find_js(base: Path):
-            cands = [
-              base / 'extension' / 'out' / 'extension.js',
-              base / 'extension' / 'dist' / 'extension.js',
-              base / 'extension' / 'src' / 'extension.js',
-              base / 'extension' / 'extension.js',
-              base / 'out' / 'extension.js',
-              base / 'dist' / 'extension.js',
-              base / 'src' / 'extension.js',
-              base / 'extension.js',
-            ]
-            for p in cands:
-              if p.exists():
-                return p, p.parent
-            return None, None
-
-          js_path, js_dir = find_js(unpacked)
-          if not js_path:
-            err('extension.js not found')
-            # print tree for debug
-            for root, dirs, files in os.walk(unpacked):
-              print(root, files)
-            sys.exit(1)
-
-          # 确保增强模块文件存在于插件目录（供 require 使用）
-          try:
-            import shutil as _sh
-            src_token = resources / 'token-login-enhanced.js'
-            src_balance = resources / 'augment-balance-enhanced.js'
-            dst_token = js_dir / 'token-login-enhanced.js'
-            dst_balance = js_dir / 'augment-balance-enhanced.js'
-            if src_token.exists():
-              _sh.copy(src_token, dst_token)
-              log(f"Copied {src_token} -> {dst_token}")
-            else:
-              warn('resources/token-login-enhanced.js not found')
-            if src_balance.exists():
-              _sh.copy(src_balance, dst_balance)
-              log(f"Copied {src_balance} -> {dst_balance}")
-            else:
-              warn('resources/augment-balance-enhanced.js not found')
-          except Exception as _e:
-            warn(f"Failed to copy enhanced modules: {_e}")
-
-          def inject_block_head(js_file: Path, block_file: Path, tag: str):
-            content = js_file.read_text(encoding='utf-8')
-            if (not force) and (tag in content):
-              warn(f'{tag} already injected (skip)')
-              return True
-            if force:
-              pattern = rf"// === {re.escape(tag)} Start ===.*?// === {re.escape(tag)} End ===\s*"
-              content = re.sub(pattern, '', content, flags=re.DOTALL)
-            block = block_file.read_text(encoding='utf-8')
-            stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            header = f"// === {tag} Start ===\n// 注入时间: {stamp}\n" + block + "\n// === {tag} End ===\n\n"
-            js_file.write_text(header + content, encoding='utf-8')
-            return True
-
-          def inject_block_tail(js_file: Path, block_file: Path, tag: str):
-            content = js_file.read_text(encoding='utf-8')
-            if (not force) and (tag in content):
-              warn(f'{tag} already injected (skip)')
-              return True
-            if force:
-              pattern = rf"// === {re.escape(tag)} Start ===.*?// === {re.escape(tag)} End ===\s*"
-              content = re.sub(pattern, '', content, flags=re.DOTALL)
-            block = block_file.read_text(encoding='utf-8')
-            stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            footer = f"\n\n// === {tag} Start ===\n// 注入时间: {stamp}\n" + block + "\n// === {tag} End ==="
-            js_file.write_text(content + footer, encoding='utf-8')
-            return True
-
-          # select files (obfuscated preferred)
-          interceptor = resources / 'interceptor.js'
-          token_login = resources / 'token-login-enhanced.js'
-          balance = resources / 'augment-balance-enhanced.js'
-
-          ok = True
-          # 固定三重注入：拦截器 + Token登录 + 余额增强
-          log('Inject interceptor at head (TRIPLE)')
-          ok = ok and inject_block_head(js_path, interceptor, 'Augment Interceptor Injection')
-
-          log('Inject token login at tail (TRIPLE)')
-          ok = ok and inject_block_tail(js_path, token_login, 'Augment Token Login Enhanced Injection')
-
-          log('Inject balance enhanced at tail (TRIPLE)')
-          ok = ok and inject_block_tail(js_path, balance, 'Augment Balance Enhanced Injection')
-
-          if not ok:
-            err('Injection failed')
-            sys.exit(1)
-
-          # inject triple exports handler to ensure initialization of enhanced modules
-          try:
-            tag = 'Augment Triple Exports Handler'
-            content = js_path.read_text(encoding='utf-8')
-            if tag not in content:
-              stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-              triple_js = f"// === {tag} Start ===\\n"
-              triple_js += f"// 注入时间: {stamp}\\n"
-              triple_js += "(function(){\\n"
-              triple_js += "  try {\\n"
-              triple_js += "    const orig = (typeof module!=='undefined' && module.exports) ? module.exports : null;\\n"
-              triple_js += "    const origActivate = orig && typeof orig.activate==='function' ? orig.activate : async function(){};\\n"
-              triple_js += "    const origDeactivate = orig && typeof orig.deactivate==='function' ? orig.deactivate : function(){};\\n"
-              triple_js += "    async function tripleActivate(context) {\\n"
-              triple_js += "      try {\\n"
-              triple_js += "        await origActivate(context);\\n"
-              triple_js += "        try {\\n"
-              triple_js += "          const TokenMod = require('./token-login-enhanced.js');\\n"
-              triple_js += "          if (TokenMod) {\\n"
-              triple_js += "            const inst = new TokenMod();\\n"
-              triple_js += "            if (typeof inst.initialize==='function') await inst.initialize(context);\\n"
-              triple_js += "            if (typeof global!=='undefined') global.augmentTokenLoginInstance = inst;\\n"
-              triple_js += "          }\\n"
-              triple_js += "        } catch(e) { console.error('[Triple] token login init failed', e); }\\n"
-              triple_js += "        try {\\n"
-              triple_js += "          const BalanceMod = require('./augment-balance-enhanced.js');\\n"
-              triple_js += "          if (BalanceMod) {\\n"
-              triple_js += "            const inst2 = new BalanceMod();\\n"
-              triple_js += "            if (typeof inst2.initialize==='function') await inst2.initialize(context);\\n"
-              triple_js += "            if (typeof global!=='undefined') global.augmentBalanceInstance = inst2;\\n"
-              triple_js += "          }\\n"
-              triple_js += "        } catch(e) { console.error('[Triple] balance init failed', e); }\\n"
-              triple_js += "      } catch (e) { console.error('[Triple] activate failed', e); }\\n"
-              triple_js += "    }\\n"
-              triple_js += "    function tripleDeactivate() {\\n"
-              triple_js += "      try { origDeactivate(); } catch(e) { console.error('[Triple] deactivate original failed', e); }\\n"
-              triple_js += "      try { if (typeof global!=='undefined' && global.augmentBalanceInstance && typeof global.augmentBalanceInstance.dispose==='function') global.augmentBalanceInstance.dispose(); } catch(e){}\\n"
-              triple_js += "      try { if (typeof global!=='undefined' && global.augmentTokenLoginInstance && typeof global.augmentTokenLoginInstance.dispose==='function') global.augmentTokenLoginInstance.dispose(); } catch(e){}\\n"
-              triple_js += "    }\\n"
-              triple_js += "    if (orig) {\\n"
-              triple_js += "      const newExports = {};\\n"
-              triple_js += "      for (const k in orig) if (k!=='activate' && k!=='deactivate') try { newExports[k]=orig[k]; } catch(_e){}\\n"
-              triple_js += "      newExports.activate = tripleActivate;\\n"
-              triple_js += "      newExports.deactivate = tripleDeactivate;\\n"
-              triple_js += "      module.exports = newExports;\\n"
-              triple_js += "      console.log('[Triple] exports wrapped');\\n"
-              triple_js += "    } else {\\n"
-              triple_js += "      console.warn('[Triple] module.exports not available');\\n"
-              triple_js += "    }\\n"
-              triple_js += "  } catch(e) { console.error('[Triple] handler error', e); }\\n"
-              triple_js += "})();\\n"
-              triple_js += f"// === {tag} End ==="
-              js_path.write_text(content + "\n\n" + triple_js, encoding='utf-8')
-              log('Triple exports handler injected')
-            else:
-              warn('Triple exports handler already present')
-          except Exception as e:
-            warn(f'Failed to inject triple exports handler: {e}')
-
-          # patch package.json displayName, prepend README header, and add commands
-          pkg_candidates = [unpacked/'package.json', unpacked/'extension'/'package.json']
-          pkg_path = None
-          for p in pkg_candidates:
-            if p.exists():
-              pkg_path = p; break
-          if not pkg_path:
-            warn('package.json not found; skip metadata patch')
-          else:
-            data = json.loads(pkg_path.read_text(encoding='utf-8'))
-            orig = data.get('displayName', data.get('name','Unknown'))
-            data['displayName'] = 'Augment 注入增强版'
-            # prepend README header (from resources/README.md) into extension README
-            readme_candidates = [unpacked/'README.md', unpacked/'extension'/'README.md']
-            header_file = resources/'README.md'
-            if header_file.exists():
-              header = header_file.read_text(encoding='utf-8').rstrip() + '\n\n'
-              readme_p = None
-              for rp in readme_candidates:
-                if rp.exists():
-                  readme_p = rp; break
-              if readme_p:
-                body = readme_p.read_text(encoding='utf-8')
-                readme_p.write_text(header + body, encoding='utf-8')
-                log('README header prepended')
-              else:
-                # If README not exists, create one with header
-                (unpacked/'README.md').write_text(header, encoding='utf-8')
-                log('README created with header')
-            else:
-              warn('resources/README.md not found; skip README header prepend')
-            # add commands
-            contributes = data.setdefault('contributes', {})
-            cmds = contributes.setdefault('commands', [])
-            existing = {c.get('command') for c in cmds}
-            extra_cmds = json.loads((resources/'package-json-commands.json').read_text(encoding='utf-8'))['commands_to_add']
-            for c in extra_cmds:
-              if c['command'] not in existing:
-                cmds.append(c)
-            # always add balance commands + configuration
-            bal = json.loads((resources/'balance-package-commands.json').read_text(encoding='utf-8'))
-            for c in bal['commands_to_add']:
-              if c['command'] not in existing:
-                cmds.append(c)
-            if 'configuration' not in contributes:
-              contributes['configuration'] = bal.get('configuration_to_add')
-            else:
-              contributes['configuration'] = contributes['configuration'] or bal.get('configuration_to_add')
-
-            # ensure activationEvents includes onUri
-            act = data.get('activationEvents')
-            if act is None:
-              act = []
-            if not isinstance(act, list):
-              act = [act]
-            if 'onUri' not in act:
-              act.append('onUri')
-              log('activationEvents: added onUri')
-            data['activationEvents'] = act
-
-            pkg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-            log(f"package.json patched: {orig} -> {data['displayName']}")
-
-            # export EXT_DIR for later steps
-            try:
-              envf = os.environ.get('GITHUB_ENV')
-              if envf:
-                with open(envf,'a', encoding='utf-8') as ef:
-                  ef.write(f"EXT_DIR={str(pkg_path.parent).replace('\\','/')}\n")
-                log(f"EXT_DIR set to {str(pkg_path.parent).replace('\\','/')}")
-            except Exception as e:
-              warn(f'Failed to export EXT_DIR: {e}')
-
-          # verify markers
-          final = js_path.read_text(encoding='utf-8')
-          missing = []
-          if 'Augment Interceptor Injection' not in final:
-            missing.append('interceptor')
-          if 'Augment Token Login Enhanced Injection' not in final:
-            missing.append('token-login')
-          if 'Augment Balance Enhanced Injection' not in final:
-            missing.append('balance')
-          if missing:
-            err('Missing tags: ' + ','.join(missing))
-            sys.exit(1)
-
-          log('Injection complete')
-          PY
-
-      - name: Read extension version
+      - name: Get version from package.json
         id: get_version
-        shell: bash
         run: |
-          if [ -f "unpacked_ext/extension/package.json" ]; then
-            VERSION=$(jq -r .version unpacked_ext/extension/package.json)
-          elif [ -f "unpacked_ext/package.json" ]; then
-            VERSION=$(jq -r .version unpacked_ext/package.json)
+          # Find package.json in unpacked extension
+          if [ -f "unpacked_ext/package.json" ]; then
+            PKG_PATH="unpacked_ext/package.json"
+          elif [ -f "unpacked_ext/extension/package.json" ]; then
+            PKG_PATH="unpacked_ext/extension/package.json"
           else
-            echo "Error: package.json not found" >&2; exit 1
+            echo "❌ package.json not found"
+            exit 1
           fi
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          echo "Version: ${VERSION}"
+          
+          VERSION=$(python3 -c "import json; print(json.load(open('$PKG_PATH'))['version'])")
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Found version: $VERSION"
 
-      - name: Check if version already exists
+      - name: Check if version already released
         id: version_check
-        shell: bash
         run: |
           git fetch --tags --force --quiet
           TAG_NAME="v${{ env.VERSION }}-triple"
@@ -349,7 +95,7 @@ jobs:
             echo "Tag ${TAG_NAME} already exists, skipping build"
           else
             echo "skip_build=false" >> $GITHUB_OUTPUT
-            echo "Proceeding: ${TAG_NAME} not found"
+            echo "Tag ${TAG_NAME} does not exist, proceeding with build"
           fi
 
       - name: Skip build notification
@@ -357,16 +103,214 @@ jobs:
         run: |
           echo "✅ Version ${{ env.VERSION }} already released (triple). Skipping packaging and release."
 
+      - name: Perform Triple Injection
+        if: steps.version_check.outputs.skip_build == 'false'
+        run: |
+          echo "🚀 Performing triple injection..."
+          
+          python3 << 'EOF'
+          import os, sys, shutil, json, re
+          from pathlib import Path
+          from datetime import datetime
+
+          def log(msg):
+              print(f"[INFO] {msg}")
+
+          def error(msg):
+              print(f"[ERROR] {msg}")
+              sys.exit(1)
+
+          # Find extension.js file
+          def find_extension_js(base_dir):
+              candidates = [
+                  base_dir / 'extension' / 'out' / 'extension.js',
+                  base_dir / 'extension' / 'dist' / 'extension.js', 
+                  base_dir / 'out' / 'extension.js',
+                  base_dir / 'dist' / 'extension.js',
+                  base_dir / 'extension.js'
+              ]
+              
+              for candidate in candidates:
+                  if candidate.exists():
+                      return candidate, candidate.parent
+              return None, None
+
+          # Simple injection at head
+          def inject_head(js_file, inject_content, tag):
+              log(f"Injecting {tag} at head...")
+              content = js_file.read_text(encoding='utf-8')
+              
+              # Remove existing injection if present
+              pattern = rf"// === {re.escape(tag)} Start ===.*?// === {re.escape(tag)} End ===\s*"
+              content = re.sub(pattern, '', content, flags=re.DOTALL)
+              
+              # Create injection
+              timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+              injection = f"// === {tag} Start ===\\n"
+              injection += f"// 注入时间: {timestamp}\\n"
+              injection += inject_content + "\\n"
+              injection += f"// === {tag} End ===\\n\\n"
+              
+              js_file.write_text(injection + content, encoding='utf-8')
+              return True
+
+          # Simple injection at tail
+          def inject_tail(js_file, inject_content, tag):
+              log(f"Injecting {tag} at tail...")
+              content = js_file.read_text(encoding='utf-8')
+              
+              # Remove existing injection if present
+              pattern = rf"// === {re.escape(tag)} Start ===.*?// === {re.escape(tag)} End ===\s*"
+              content = re.sub(pattern, '', content, flags=re.DOTALL)
+              
+              # Create injection
+              timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+              injection = f"\\n\\n// === {tag} Start ===\\n"
+              injection += f"// 注入时间: {timestamp}\\n"
+              injection += inject_content + "\\n"
+              injection += f"// === {tag} End ==="
+              
+              js_file.write_text(content + injection, encoding='utf-8')
+              return True
+
+          try:
+              # Find extension.js
+              unpacked = Path('unpacked_ext')
+              js_path, js_dir = find_extension_js(unpacked)
+              
+              if not js_path:
+                  error("extension.js not found!")
+              
+              log(f"Found extension.js: {js_path}")
+              
+              # Read injection files
+              resources = Path('resources')
+              interceptor_content = (resources / 'interceptor.js').read_text(encoding='utf-8')
+              token_content = (resources / 'token-login-enhanced.js').read_text(encoding='utf-8')
+              balance_content = (resources / 'augment-balance-enhanced.js').read_text(encoding='utf-8')
+              
+              # Copy module files to extension directory
+              shutil.copy(resources / 'token-login-enhanced.js', js_dir / 'token-login-enhanced.js')
+              shutil.copy(resources / 'augment-balance-enhanced.js', js_dir / 'augment-balance-enhanced.js')
+              log("Module files copied")
+              
+              # Perform triple injection
+              inject_head(js_path, interceptor_content, 'Augment Interceptor Injection')
+              inject_tail(js_path, token_content, 'Augment Token Login Enhanced Injection')  
+              inject_tail(js_path, balance_content, 'Augment Balance Enhanced Injection')
+              
+              log("✅ Triple injection completed successfully")
+              
+          except Exception as e:
+              error(f"Injection failed: {e}")
+          EOF
+
+      - name: Update package.json and README
+        if: steps.version_check.outputs.skip_build == 'false'
+        run: |
+          echo "📝 Updating package.json and README..."
+          
+          python3 << 'EOF'
+          import json
+          from pathlib import Path
+
+          def log(msg):
+              print(f"[INFO] {msg}")
+
+          try:
+              unpacked = Path('unpacked_ext')
+              resources = Path('resources')
+              
+              # Find package.json
+              pkg_candidates = [unpacked / 'package.json', unpacked / 'extension' / 'package.json']
+              pkg_path = None
+              for p in pkg_candidates:
+                  if p.exists():
+                      pkg_path = p
+                      break
+              
+              if pkg_path:
+                  log(f"Updating package.json: {pkg_path}")
+                  with open(pkg_path, 'r', encoding='utf-8') as f:
+                      pkg_data = json.load(f)
+                  
+                  # Update display name
+                  pkg_data['displayName'] = 'Augment 注入增强版'
+                  
+                  # Add commands and configuration
+                  contributes = pkg_data.setdefault('contributes', {})
+                  commands = contributes.setdefault('commands', [])
+                  existing_commands = {cmd.get('command') for cmd in commands}
+                  
+                  # Load and add token commands
+                  with open(resources / 'package-json-commands.json', 'r', encoding='utf-8') as f:
+                      token_commands = json.load(f)['commands_to_add']
+                  for cmd in token_commands:
+                      if cmd['command'] not in existing_commands:
+                          commands.append(cmd)
+                  
+                  # Load and add balance commands + configuration
+                  with open(resources / 'balance-package-commands.json', 'r', encoding='utf-8') as f:
+                      balance_config = json.load(f)
+                      balance_commands = balance_config['commands_to_add']
+                      balance_configuration = balance_config['configuration_to_add']
+                  
+                  for cmd in balance_commands:
+                      if cmd['command'] not in existing_commands:
+                          commands.append(cmd)
+                  
+                  contributes['configuration'] = balance_configuration
+                  
+                  # Ensure activationEvents includes onUri
+                  activation_events = pkg_data.setdefault('activationEvents', [])
+                  if 'onUri' not in activation_events:
+                      activation_events.append('onUri')
+                  
+                  # Save updated package.json
+                  with open(pkg_path, 'w', encoding='utf-8') as f:
+                      json.dump(pkg_data, f, indent=2, ensure_ascii=False)
+                  
+                  log("package.json updated")
+              
+              # Update README
+              readme_header_file = resources / 'README.md'
+              if readme_header_file.exists():
+                  header = readme_header_file.read_text(encoding='utf-8').rstrip() + '\n\n'
+                  readme_candidates = [unpacked / 'README.md', unpacked / 'extension' / 'README.md']
+                  readme_path = None
+                  for rp in readme_candidates:
+                      if rp.exists():
+                          readme_path = rp
+                          break
+                  
+                  if readme_path:
+                      body = readme_path.read_text(encoding='utf-8')
+                      readme_path.write_text(header + body, encoding='utf-8')
+                      log("README header prepended")
+                  else:
+                      (unpacked / 'README.md').write_text(header, encoding='utf-8')
+                      log("README created with header")
+              
+              log("✅ Package metadata updated successfully")
+              
+          except Exception as e:
+              print(f"[ERROR] Failed to update metadata: {e}")
+              exit(1)
+          EOF
+
       - name: Repackage VSIX
         if: steps.version_check.outputs.skip_build == 'false'
         run: |
+          echo "📦 Repackaging VSIX..."
           PATCHED_VSIX_NAME="augment-vscode-v${{ env.VERSION }}-triple.vsix"
           echo "PATCHED_VSIX_NAME=${PATCHED_VSIX_NAME}" >> $GITHUB_ENV
+
           cd unpacked_ext
-          # 重新打包为 VSIX (VSIX 本质上就是 ZIP 文件)
+          # VSIX is just a ZIP file
           zip -r "../${PATCHED_VSIX_NAME}" . -x "*.git*"
           cd ..
-          echo "✅ VSIX 重新打包完成: ${PATCHED_VSIX_NAME}"
+
+          echo "✅ VSIX repackaged: ${PATCHED_VSIX_NAME}"
           ls -l *.vsix || true
 
       - name: Create Release
@@ -374,10 +318,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ env.VERSION }}-triple"
-          name: "Augment v${{ env.VERSION }} (triple)"
+          name: "Augment v${{ env.VERSION }} (Triple Injection)"
           body: |
-            Automated TRIPLE injection build.
+            🚀 **Augment 三重注入增强版**
+
+            **注入功能：**
+            - ✅ 拦截器注入 
+            - ✅ Token登录增强 
+            - ✅ 余额增强功能 
+
+            **版本信息：**
+            - 原版本: v${{ env.VERSION }}
+            - 注入模式: Triple
+            - 构建时间: ${{ github.run_id }}
+
           files: ${{ env.PATCHED_VSIX_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
