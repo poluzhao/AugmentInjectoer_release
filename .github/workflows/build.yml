@@ -28,7 +28,7 @@ jobs:
           # 确保根目录 resources 存在且包含所有必须文件（由上游手动提供）
           mkdir -p "resources"
 
-          # 校验必须的 JS 资源
+          # 校验必须的 JS 资源（不再在 CI 中进行混淆生成）
           for f in interceptor.js token-login-enhanced.js augment-balance-enhanced.js; do
             if [ ! -f "resources/$f" ]; then
               echo "Error: missing resources/$f" >&2
@@ -37,7 +37,7 @@ jobs:
             echo "Found resources/$f"
           done
 
-          # 校验配置文件
+          # 校验配置文件（这些无需混淆）
           for f in package-json-commands.json balance-package-commands.json; do
             if [ ! -f "resources/$f" ]; then
               echo "Error: missing resources/$f" >&2
@@ -162,7 +162,7 @@ jobs:
           balance = resources / 'augment-balance-enhanced.js'
 
           ok = True
-          # 固定三重注入：拦截器 + Token登录 + 余额增强
+          # 固定三重注入：拦截器(头部) + Token登录(尾部) + 余额增强(尾部)
           log('Inject interceptor at head (TRIPLE)')
           ok = ok and inject_block_head(js_path, interceptor, 'Augment Interceptor Injection')
 
@@ -182,54 +182,52 @@ jobs:
             content = js_path.read_text(encoding='utf-8')
             if tag not in content:
               stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-              triple_js = f"""
-// === {tag} Start ===
-// 注入时间: {stamp}
-(function(){{
-  try {{
-    const orig = (typeof module!=='undefined' && module.exports) ? module.exports : null;
-    const origActivate = orig && typeof orig.activate==='function' ? orig.activate : async function(){{}};
-    const origDeactivate = orig && typeof orig.deactivate==='function' ? orig.deactivate : function(){{}};
-    async function tripleActivate(context) {{
-      try {{
-        await origActivate(context);
-        try {{
-          const TokenMod = require('./token-login-enhanced.js');
-          if (TokenMod) {{
-            const inst = new TokenMod();
-            if (typeof inst.initialize==='function') await inst.initialize(context);
-            if (typeof global!=='undefined') global.augmentTokenLoginInstance = inst;
-          }}
-        }} catch(e) {{ console.error('[Triple] token login init failed', e); }}
-        try {{
-          const BalanceMod = require('./augment-balance-enhanced.js');
-          if (BalanceMod) {{
-            const inst2 = new BalanceMod();
-            if (typeof inst2.initialize==='function') await inst2.initialize(context);
-            if (typeof global!=='undefined') global.augmentBalanceInstance = inst2;
-          }}
-        }} catch(e) {{ console.error('[Triple] balance init failed', e); }}
-      }} catch (e) {{ console.error('[Triple] activate failed', e); }}
-    }}
-    function tripleDeactivate() {{
-      try {{ origDeactivate(); }} catch(e) {{ console.error('[Triple] deactivate original failed', e); }}
-      try {{ if (typeof global!=='undefined' && global.augmentBalanceInstance && typeof global.augmentBalanceInstance.dispose==='function') global.augmentBalanceInstance.dispose(); }} catch(e){{}}
-      try {{ if (typeof global!=='undefined' && global.augmentTokenLoginInstance && typeof global.augmentTokenLoginInstance.dispose==='function') global.augmentTokenLoginInstance.dispose(); }} catch(e){{}}
-    }}
-    if (orig) {{
-      const newExports = {{}};
-      for (const k in orig) if (k!=='activate' && k!=='deactivate') try {{ newExports[k]=orig[k]; }} catch(_e){{}}
-      newExports.activate = tripleActivate;
-      newExports.deactivate = tripleDeactivate;
-      module.exports = newExports;
-      console.log('[Triple] exports wrapped');
-    }} else {{
-      console.warn('[Triple] module.exports not available');
-    }}
-  }} catch(e) {{ console.error('[Triple] handler error', e); }}
-}})();
-// === {tag} End ===
-"""
+              triple_js = f"// === {tag} Start ===\\n"
+              triple_js += f"// 注入时间: {stamp}\\n"
+              triple_js += "(function(){\\n"
+              triple_js += "  try {\\n"
+              triple_js += "    const orig = (typeof module!=='undefined' && module.exports) ? module.exports : null;\\n"
+              triple_js += "    const origActivate = orig && typeof orig.activate==='function' ? orig.activate : async function(){};\\n"
+              triple_js += "    const origDeactivate = orig && typeof orig.deactivate==='function' ? orig.deactivate : function(){};\\n"
+              triple_js += "    async function tripleActivate(context) {\\n"
+              triple_js += "      try {\\n"
+              triple_js += "        await origActivate(context);\\n"
+              triple_js += "        try {\\n"
+              triple_js += "          const TokenMod = require('./token-login-enhanced.js');\\n"
+              triple_js += "          if (TokenMod) {\\n"
+              triple_js += "            const inst = new TokenMod();\\n"
+              triple_js += "            if (typeof inst.initialize==='function') await inst.initialize(context);\\n"
+              triple_js += "            if (typeof global!=='undefined') global.augmentTokenLoginInstance = inst;\\n"
+              triple_js += "          }\\n"
+              triple_js += "        } catch(e) { console.error('[Triple] token login init failed', e); }\\n"
+              triple_js += "        try {\\n"
+              triple_js += "          const BalanceMod = require('./augment-balance-enhanced.js');\\n"
+              triple_js += "          if (BalanceMod) {\\n"
+              triple_js += "            const inst2 = new BalanceMod();\\n"
+              triple_js += "            if (typeof inst2.initialize==='function') await inst2.initialize(context);\\n"
+              triple_js += "            if (typeof global!=='undefined') global.augmentBalanceInstance = inst2;\\n"
+              triple_js += "          }\\n"
+              triple_js += "        } catch(e) { console.error('[Triple] balance init failed', e); }\\n"
+              triple_js += "      } catch (e) { console.error('[Triple] activate failed', e); }\\n"
+              triple_js += "    }\\n"
+              triple_js += "    function tripleDeactivate() {\\n"
+              triple_js += "      try { origDeactivate(); } catch(e) { console.error('[Triple] deactivate original failed', e); }\\n"
+              triple_js += "      try { if (typeof global!=='undefined' && global.augmentBalanceInstance && typeof global.augmentBalanceInstance.dispose==='function') global.augmentBalanceInstance.dispose(); } catch(e){}\\n"
+              triple_js += "      try { if (typeof global!=='undefined' && global.augmentTokenLoginInstance && typeof global.augmentTokenLoginInstance.dispose==='function') global.augmentTokenLoginInstance.dispose(); } catch(e){}\\n"
+              triple_js += "    }\\n"
+              triple_js += "    if (orig) {\\n"
+              triple_js += "      const newExports = {};\\n"
+              triple_js += "      for (const k in orig) if (k!=='activate' && k!=='deactivate') try { newExports[k]=orig[k]; } catch(_e){}\\n"
+              triple_js += "      newExports.activate = tripleActivate;\\n"
+              triple_js += "      newExports.deactivate = tripleDeactivate;\\n"
+              triple_js += "      module.exports = newExports;\\n"
+              triple_js += "      console.log('[Triple] exports wrapped');\\n"
+              triple_js += "    } else {\\n"
+              triple_js += "      console.warn('[Triple] module.exports not available');\\n"
+              triple_js += "    }\\n"
+              triple_js += "  } catch(e) { console.error('[Triple] handler error', e); }\\n"
+              triple_js += "})();\\n"
+              triple_js += f"// === {tag} End ==="
               js_path.write_text(content + "\n\n" + triple_js, encoding='utf-8')
               log('Triple exports handler injected')
             else:
