@@ -1,4 +1,4 @@
-name: Build Augment Injector Release (Obfuscated)
+name: Build Augment Injector Release
 
 on:
   workflow_dispatch: {}
@@ -231,21 +231,43 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "Version: ${VERSION}"
 
+      - name: Check if version already exists
+        id: version_check
+        shell: bash
+        run: |
+          TAG_NAME="v${{ env.VERSION }}-triple"
+          if git tag -l | grep -q "^${TAG_NAME}$"; then
+            echo "skip_build=true" >> $GITHUB_OUTPUT
+            echo "Tag ${TAG_NAME} already exists, skipping build"
+          else
+            echo "skip_build=false" >> $GITHUB_OUTPUT
+            echo "Proceeding: ${TAG_NAME} not found"
+          fi
+
+      - name: Skip build notification
+        if: steps.version_check.outputs.skip_build == 'true'
+        run: |
+          echo "✅ Version ${{ env.VERSION }} already released (triple). Skipping packaging and release."
+
       - name: Setup Node.js (for vsce)
+        if: steps.version_check.outputs.skip_build == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install vsce
+        if: steps.version_check.outputs.skip_build == 'false'
         run: npm install -g @vscode/vsce
 
       - name: Install extension deps and ignore node_modules
+        if: steps.version_check.outputs.skip_build == 'false'
         working-directory: ./unpacked_ext/extension
         run: |
           npm install
           echo "node_modules/" > .vscodeignore
 
       - name: Package VSIX
+        if: steps.version_check.outputs.skip_build == 'false'
         id: pkg
         run: |
           PATCHED_VSIX_NAME="augment.vscode-augment-${{ env.VERSION }}-${{ env.INJECTION_MODE }}.vsix"
@@ -255,6 +277,7 @@ jobs:
           ls -l ../../*.vsix || true
 
       - name: Create Release
+        if: steps.version_check.outputs.skip_build == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ env.VERSION }}-triple"
