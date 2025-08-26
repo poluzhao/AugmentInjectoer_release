@@ -360,7 +360,7 @@ jobs:
       - name: Repackage VSIX
         if: steps.version_check.outputs.skip_build == 'false'
         run: |
-          PATCHED_VSIX_NAME="augment-vscode-modified-v${{ env.VERSION }}.vsix"
+          PATCHED_VSIX_NAME="augment-vscode-v${{ env.VERSION }}-triple.vsix"
           echo "PATCHED_VSIX_NAME=${PATCHED_VSIX_NAME}" >> $GITHUB_ENV
           cd unpacked_ext
           # 重新打包为 VSIX (VSIX 本质上就是 ZIP 文件)
@@ -376,7 +376,7 @@ jobs:
           tag_name: "v${{ env.VERSION }}-triple"
           name: "Augment v${{ env.VERSION }} (triple)"
           body: |
-            Automated build (TRIPLE injection).
+            Automated TRIPLE injection build.
           files: ${{ env.PATCHED_VSIX_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
