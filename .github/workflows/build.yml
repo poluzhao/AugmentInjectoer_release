@@ -312,25 +312,57 @@ jobs:
 
                   # Also add configuration if present
                   if 'configuration_to_add' in balance_commands:
-                      if 'configuration' not in pkg_data['contributes']:
-                          pkg_data['contributes']['configuration'] = {}
+                      try:
+                          config = balance_commands['configuration_to_add']
+                          log(f"Configuration structure: {list(config.keys())}")
 
-                      config = balance_commands['configuration_to_add']
-                      if 'properties' in config:
-                          if 'properties' not in pkg_data['contributes']['configuration']:
-                              pkg_data['contributes']['configuration']['properties'] = {}
+                          # Check existing configuration structure
+                          if 'configuration' in pkg_data['contributes']:
+                              log(f"Existing configuration type: {type(pkg_data['contributes']['configuration'])}")
+                              if isinstance(pkg_data['contributes']['configuration'], list):
+                                  log("Configuration is a list, converting to object")
+                                  pkg_data['contributes']['configuration'] = {
+                                      "title": "Augment Balance",
+                                      "properties": {}
+                                  }
+                              elif not isinstance(pkg_data['contributes']['configuration'], dict):
+                                  log("Configuration is not dict or list, creating new")
+                                  pkg_data['contributes']['configuration'] = {
+                                      "title": "Augment Balance",
+                                      "properties": {}
+                                  }
+                              elif 'properties' not in pkg_data['contributes']['configuration']:
+                                  pkg_data['contributes']['configuration']['properties'] = {}
+                          else:
+                              log("Creating new configuration section")
+                              pkg_data['contributes']['configuration'] = {
+                                  "title": "Augment Balance",
+                                  "properties": {}
+                              }
+
+                          # Set title if provided
+                          if 'title' in config:
+                              pkg_data['contributes']['configuration']['title'] = config['title']
+                              log(f"Set configuration title: {config['title']}")
 
                           # Add configuration properties
-                          added_configs = 0
-                          for prop_name, prop_config in config['properties'].items():
-                              if prop_name not in pkg_data['contributes']['configuration']['properties']:
-                                  pkg_data['contributes']['configuration']['properties'][prop_name] = prop_config
-                                  log(f"Added configuration: {prop_name}")
-                                  added_configs += 1
-                              else:
-                                  log(f"Configuration already exists: {prop_name}")
+                          if 'properties' in config:
+                              added_configs = 0
+                              for prop_name, prop_config in config['properties'].items():
+                                  if prop_name not in pkg_data['contributes']['configuration']['properties']:
+                                      pkg_data['contributes']['configuration']['properties'][prop_name] = prop_config
+                                      log(f"Added configuration: {prop_name}")
+                                      added_configs += 1
+                                  else:
+                                      log(f"Configuration already exists: {prop_name}")
 
-                          log(f"Added {added_configs} configuration properties")
+                              log(f"Added {added_configs} configuration properties")
+                          else:
+                              log("No properties found in configuration_to_add")
+
+                      except Exception as config_error:
+                          log(f"Error adding configuration: {config_error}")
+                          log("Skipping configuration addition")
               else:
                   log("balance-package-commands.json not found, skipping")
 
@@ -424,6 +456,7 @@ jobs:
             - **Session Management**: Advanced session handling and spoofing
             - **Request Interception**: Comprehensive HTTP/HTTPS request modification
             - **Balance Enhancement**: Enhanced balance display and management
+            - **Hardware Spoofing**: System fingerprint protection
 
             ## 📥 Installation
             1. Download the `.vsix` file from this release
@@ -431,6 +464,11 @@ jobs:
             3. Go to Extensions (Ctrl+Shift+X)
             4. Click the "..." menu and select "Install from VSIX..."
             5. Select the downloaded file
+
+            ## ⚠️ Important Notes
+            - This is a modified version with enhanced functionality
+            - Use responsibly and in accordance with terms of service
+            - Based on official Augment extension v${{ env.VERSION }}
 
             ## 🔧 Technical Details
             - **Base Version**: v${{ env.VERSION }}
