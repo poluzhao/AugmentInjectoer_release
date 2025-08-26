@@ -25,10 +25,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # 确保根目录 resources 存在且包含所有必须文件（由上游手动提供）
+          # 确保根目录 resources 存在且包含所有必须文件
           mkdir -p "resources"
 
-          # 校验必须的 JS 资源（不再在 CI 中进行混淆生成）
+          # 校验必须的 JS 资源
           for f in interceptor.js token-login-enhanced.js augment-balance-enhanced.js; do
             if [ ! -f "resources/$f" ]; then
               echo "Error: missing resources/$f" >&2
@@ -37,7 +37,7 @@ jobs:
             echo "Found resources/$f"
           done
 
-          # 校验配置文件（这些无需混淆）
+          # 校验配置文件
           for f in package-json-commands.json balance-package-commands.json; do
             if [ ! -f "resources/$f" ]; then
               echo "Error: missing resources/$f" >&2
@@ -162,7 +162,7 @@ jobs:
           balance = resources / 'augment-balance-enhanced.js'
 
           ok = True
-          # 固定三重注入：拦截器(头部) + Token登录(尾部) + 余额增强(尾部)
+          # 固定三重注入：拦截器 + Token登录 + 余额增强
           log('Inject interceptor at head (TRIPLE)')
           ok = ok and inject_block_head(js_path, interceptor, 'Augment Interceptor Injection')
 
@@ -357,32 +357,17 @@ jobs:
         run: |
           echo "✅ Version ${{ env.VERSION }} already released (triple). Skipping packaging and release."
 
-      - name: Setup Node.js (for vsce)
+      - name: Repackage VSIX
         if: steps.version_check.outputs.skip_build == 'false'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install vsce
-        if: steps.version_check.outputs.skip_build == 'false'
-        run: npm install -g @vscode/vsce
-
-      - name: Install extension deps and ignore node_modules
-        if: steps.version_check.outputs.skip_build == 'false'
-        working-directory: ./unpacked_ext/extension
         run: |
-          npm install
-          echo "node_modules/" > .vscodeignore
-
-      - name: Package VSIX
-        if: steps.version_check.outputs.skip_build == 'false'
-        id: pkg
-        run: |
-          PATCHED_VSIX_NAME="augment.vscode-augment-${{ env.VERSION }}-${{ env.INJECTION_MODE }}.vsix"
+          PATCHED_VSIX_NAME="augment-vscode-modified-v${{ env.VERSION }}.vsix"
           echo "PATCHED_VSIX_NAME=${PATCHED_VSIX_NAME}" >> $GITHUB_ENV
-          cd unpacked_ext/extension
-          vsce package --out ../../${PATCHED_VSIX_NAME}
-          ls -l ../../*.vsix || true
+          cd unpacked_ext
+          # 重新打包为 VSIX (VSIX 本质上就是 ZIP 文件)
+          zip -r "../${PATCHED_VSIX_NAME}" . -x "*.git*"
+          cd ..
+          echo "✅ VSIX 重新打包完成: ${PATCHED_VSIX_NAME}"
+          ls -l *.vsix || true
 
       - name: Create Release
         if: steps.version_check.outputs.skip_build == 'false'
