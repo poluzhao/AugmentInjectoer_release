@@ -1,4 +1,4 @@
-name: Build Augment Injector Release
+name: Build Augment Injector Release (Obfuscated)
 
 on:
   workflow_dispatch: {}
@@ -25,15 +25,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rel_dir="AugmentInjectoer_release"
-          # 确保 release 目录存在
-          mkdir -p "$rel_dir/resources"
+          # 确保根目录 resources 存在且包含所有必须文件
+          mkdir -p "resources"
 
-          # 使用项目资源
+          # 使用项目资源（根目录 resources/）
           for f in interceptor.js token-login-enhanced.js augment-balance-enhanced.js \
                    package-json-commands.json balance-package-commands.json; do
-            if [ ! -f "$rel_dir/resources/$f" ]; then
-              echo "Error: missing $rel_dir/resources/$f" >&2
+            if [ ! -f "resources/$f" ]; then
+              echo "Error: missing resources/$f" >&2
               exit 1
             fi
           done
@@ -67,8 +66,7 @@ jobs:
           force = os.environ.get('FORCE_INJECTION','false').lower()=='true'
           debug = os.environ.get('DEBUG_MODE','false').lower()=='true'
 
-          rel_dir = Path('AugmentInjectoer_release')
-          resources = rel_dir / 'resources'
+          resources = Path('resources')
 
           vsix = Path('original.vsix')
           unpacked = Path('unpacked_ext')
@@ -235,6 +233,7 @@ jobs:
         id: version_check
         shell: bash
         run: |
+          git fetch --tags --force --quiet
           TAG_NAME="v${{ env.VERSION }}-triple"
           if git tag -l | grep -q "^${TAG_NAME}$"; then
             echo "skip_build=true" >> $GITHUB_OUTPUT
