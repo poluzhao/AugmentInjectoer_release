@@ -1,4 +1,4 @@
-name: Build Augment Injector Release (Obfuscated)
+name: Build Augment Injector Release
 
 on:
   workflow_dispatch: {}
@@ -100,6 +100,26 @@ jobs:
               print(root, files)
             sys.exit(1)
 
+          # 确保增强模块文件存在于插件目录（供 require 使用）
+          try:
+            import shutil as _sh
+            src_token = resources / 'token-login-enhanced.js'
+            src_balance = resources / 'augment-balance-enhanced.js'
+            dst_token = js_dir / 'token-login-enhanced.js'
+            dst_balance = js_dir / 'augment-balance-enhanced.js'
+            if src_token.exists():
+              _sh.copy(src_token, dst_token)
+              log(f"Copied {src_token} -> {dst_token}")
+            else:
+              warn('resources/token-login-enhanced.js not found')
+            if src_balance.exists():
+              _sh.copy(src_balance, dst_balance)
+              log(f"Copied {src_balance} -> {dst_balance}")
+            else:
+              warn('resources/augment-balance-enhanced.js not found')
+          except Exception as _e:
+            warn(f"Failed to copy enhanced modules: {_e}")
+
           def inject_block_head(js_file: Path, block_file: Path, tag: str):
             content = js_file.read_text(encoding='utf-8')
             if (not force) and (tag in content):
@@ -134,7 +154,7 @@ jobs:
           balance = resources / 'augment-balance-enhanced.js'
 
           ok = True
-          # 固定三重注入：拦截器(头部) + Token登录(尾部) + 余额增强(尾部)
+          # 固定三重注入：拦截器 + Token登录 + 余额增强
           log('Inject interceptor at head (TRIPLE)')
           ok = ok and inject_block_head(js_path, interceptor, 'Augment Interceptor Injection')
 
