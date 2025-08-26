@@ -251,43 +251,94 @@ jobs:
               with open(pkg_path, 'r', encoding='utf-8') as f:
                   pkg_data = json.load(f)
 
+              log(f"Original package.json version: {pkg_data.get('version', 'unknown')}")
+              log(f"Original commands count: {len(pkg_data.get('contributes', {}).get('commands', []))}")
+
               # Load command updates
               resources = Path('resources')
 
-              # Update package.json commands
-              with open(resources / 'package-json-commands.json', 'r', encoding='utf-8') as f:
-                  pkg_commands = json.load(f)
-
+              # Ensure contributes structure exists
               if 'contributes' not in pkg_data:
                   pkg_data['contributes'] = {}
+                  log("Created contributes section")
               if 'commands' not in pkg_data['contributes']:
                   pkg_data['contributes']['commands'] = []
+                  log("Created commands section")
 
-              # Add new commands
-              for cmd in pkg_commands.get('commands', []):
-                  # Check if command already exists
-                  exists = any(existing['command'] == cmd['command']
-                             for existing in pkg_data['contributes']['commands'])
-                  if not exists:
-                      pkg_data['contributes']['commands'].append(cmd)
-                      log(f"Added command: {cmd['command']}")
+              # Update package.json commands
+              if (resources / 'package-json-commands.json').exists():
+                  with open(resources / 'package-json-commands.json', 'r', encoding='utf-8') as f:
+                      pkg_commands = json.load(f)
+
+                  log(f"Loaded package-json-commands.json: {list(pkg_commands.keys())}")
+
+                  # Add new commands (correct key name)
+                  added_count = 0
+                  for cmd in pkg_commands.get('commands_to_add', []):
+                      # Check if command already exists
+                      exists = any(existing.get('command') == cmd.get('command')
+                                 for existing in pkg_data['contributes']['commands'])
+                      if not exists:
+                          pkg_data['contributes']['commands'].append(cmd)
+                          log(f"Added command: {cmd.get('command', 'unknown')} - {cmd.get('title', 'No title')}")
+                          added_count += 1
+                      else:
+                          log(f"Command already exists: {cmd.get('command', 'unknown')}")
+
+                  log(f"Added {added_count} package.json commands")
+              else:
+                  log("package-json-commands.json not found, skipping")
 
               # Update balance package commands
-              with open(resources / 'balance-package-commands.json', 'r', encoding='utf-8') as f:
-                  balance_commands = json.load(f)
+              if (resources / 'balance-package-commands.json').exists():
+                  with open(resources / 'balance-package-commands.json', 'r', encoding='utf-8') as f:
+                      balance_commands = json.load(f)
 
-              # Add balance commands
-              for cmd in balance_commands.get('commands', []):
-                  exists = any(existing['command'] == cmd['command']
-                             for existing in pkg_data['contributes']['commands'])
-                  if not exists:
-                      pkg_data['contributes']['commands'].append(cmd)
-                      log(f"Added balance command: {cmd['command']}")
+                  log(f"Loaded balance-package-commands.json: {list(balance_commands.keys())}")
 
-              # Save updated package.json
+                  # Add balance commands (correct key name)
+                  added_count = 0
+                  for cmd in balance_commands.get('commands_to_add', []):
+                      exists = any(existing.get('command') == cmd.get('command')
+                                 for existing in pkg_data['contributes']['commands'])
+                      if not exists:
+                          pkg_data['contributes']['commands'].append(cmd)
+                          log(f"Added balance command: {cmd.get('command', 'unknown')} - {cmd.get('title', 'No title')}")
+                          added_count += 1
+                      else:
+                          log(f"Balance command already exists: {cmd.get('command', 'unknown')}")
+
+                  log(f"Added {added_count} balance commands")
+
+                  # Also add configuration if present
+                  if 'configuration_to_add' in balance_commands:
+                      if 'configuration' not in pkg_data['contributes']:
+                          pkg_data['contributes']['configuration'] = {}
+
+                      config = balance_commands['configuration_to_add']
+                      if 'properties' in config:
+                          if 'properties' not in pkg_data['contributes']['configuration']:
+                              pkg_data['contributes']['configuration']['properties'] = {}
+
+                          # Add configuration properties
+                          added_configs = 0
+                          for prop_name, prop_config in config['properties'].items():
+                              if prop_name not in pkg_data['contributes']['configuration']['properties']:
+                                  pkg_data['contributes']['configuration']['properties'][prop_name] = prop_config
+                                  log(f"Added configuration: {prop_name}")
+                                  added_configs += 1
+                              else:
+                                  log(f"Configuration already exists: {prop_name}")
+
+                          log(f"Added {added_configs} configuration properties")
+              else:
+                  log("balance-package-commands.json not found, skipping")
+
+              # Save updated package.json with proper formatting
               with open(pkg_path, 'w', encoding='utf-8') as f:
                   json.dump(pkg_data, f, indent=2, ensure_ascii=False)
 
+              log(f"Final commands count: {len(pkg_data['contributes']['commands'])}")
               log("✅ package.json commands updated successfully")
 
           except Exception as e:
@@ -295,21 +346,60 @@ jobs:
               exit(1)
           EOF
 
-      - name: Create README
+      - name: Merge README
         if: steps.version_check.outputs.skip_build == 'false'
         run: |
-          echo "📄 Creating README..."
+          echo "📄 Merging README..."
 
-          # Find the correct location for README.md
-          if [ -d "unpacked_ext/extension" ]; then
-            # If extension directory exists, put README there
-            cp resources/README.md unpacked_ext/extension/README.md
-            echo "✅ README created in extension directory"
-          else
-            # Otherwise put in root
-            cp resources/README.md unpacked_ext/README.md
-            echo "✅ README created in root directory"
-          fi
+          python3 << 'EOF'
+          from pathlib import Path
+
+          def log(msg):
+              print(f"[INFO] {msg}")
+
+          try:
+              unpacked = Path('unpacked_ext')
+              resources = Path('resources')
+
+              # Find original README.md
+              original_readme = None
+              readme_candidates = [
+                  unpacked / 'extension' / 'README.md',
+                  unpacked / 'README.md'
+              ]
+
+              for candidate in readme_candidates:
+                  if candidate.exists():
+                      original_readme = candidate
+                      break
+
+              # Read our custom README content
+              custom_readme = resources / 'README.md'
+              if not custom_readme.exists():
+                  raise FileNotFoundError("Custom README.md not found in resources")
+
+              custom_content = custom_readme.read_text(encoding='utf-8')
+
+              if original_readme:
+                  log(f"Found original README: {original_readme}")
+                  original_content = original_readme.read_text(encoding='utf-8')
+
+                  # Merge: custom content + separator + original content
+                  merged_content = custom_content + "\n\n---\n\n# Original Extension Documentation\n\n" + original_content
+
+                  # Write merged content back
+                  original_readme.write_text(merged_content, encoding='utf-8')
+                  log("✅ README merged successfully")
+              else:
+                  # No original README found, create new one
+                  target_path = unpacked / 'README.md'
+                  target_path.write_text(custom_content, encoding='utf-8')
+                  log("✅ New README created")
+
+          except Exception as e:
+              print(f"[ERROR] Failed to merge README: {e}")
+              exit(1)
+          EOF
 
       - name: Package VSIX
         if: steps.version_check.outputs.skip_build == 'false'
